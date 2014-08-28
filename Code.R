@@ -31,9 +31,17 @@ training$holiday <- factor(training$holiday)
 training$workingday <- factor(training$workingday)
 training$weather <- factor(training$weather)
 training$Date <- as.Date(training$DateTime)
-training <- data.frame(training[, c(12, 16)], training[, 1:8], training[, 13:15], training[, 9:11])
-names(training) <- c("DateTime", "Date", "Season", "Holiday", "Workday", "Weather", "Temp", "ATemp", "Humidity", "WindSpeed", "Hour", "Weekday", "T", "Casual", "Registered", "Count")
+training$ID <- 1:length(training$Date)
+training <- data.frame(training[, 17], training[, c(12, 16)], training[, 1:8], training[, 13:15], training[, 9:11])
+names(training) <- c("ID", "DateTime", "Date", "Season", "Holiday", "Workday", "Weather", "Temp", "ATemp", "Humidity", "WindSpeed", "Hour", "Weekday", "T", "Casual", "Registered", "Count")
+training <- training[order(training$DateTime), ]
 training$DateTime <- as.POSIXlt(training$DateTime)
+
+# Evaluation Formula (Root Mean Squared Logarithmic Error):
+RMSLE <- function(Predicted, Reference) {
+    n <- length(Predicted)
+    sqrt(sum((log(Predicted + 1) - log(Reference + 1))^2)/n)
+}
 
 # Exploratory Analysis
 ## Plot Autocorrelation Function (ACF), and we could see:
@@ -66,25 +74,32 @@ ggplot(training[training$Hour == 8, ], aes(x = DateTime, y = Count)) + geom_line
 ### Workday plot also shows this pattern.
 ggplot(training[training$Hour == 8, ], aes(x = DateTime, y = Count)) + geom_line(aes(color = Workday))
 
-
+# Preapring T-Series Data
+## Add T-1, T-2, T-3 Count Data based on Weekday and Hour
+WeekdayList <- c("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
+HourList <- as.character(0:23)
+training2 <- training[0, ]
+for (i in 1:7) {
+    for (j in 1:24) {
+        Temp <- training[training$Weekday == WeekdayList[i] & training$Hour == HourList[j], ]
+        Temp$Tm1Count <- c(NA, Temp$Count[1:(length(Temp$Count) - 1)])
+        Temp$Tm1Delay <- c(NA, Temp$T[2:length(Temp$T)] - Temp$T[1:(length(Temp$T) - 1)])/7
+        Temp$Tm2Count <- c(NA, NA, Temp$Count[1:(length(Temp$Count)-2)])
+        Temp$Tm2Delay <- c(NA, NA, Temp$T[3:length(Temp$T)] - Temp$T[1:(length(Temp$T) - 2)])/7
+        Temp$Tm3Count <- c(NA, NA, NA, Temp$Count[1:(length(Temp$Count)-3)])
+        Temp$Tm3Delay <- c(NA, NA, NA, Temp$T[4:length(Temp$T)] - Temp$T[1:(length(Temp$T) - 3)])/7
+        training2 <- rbind(training2, Temp)
+    }
+}
+training <- training2[order(training2$ID), ]
+rm(training2, i, j)
 
 # Build models
-## 
-
-
-
-
-
-
-
-
-# Evaluation Formula (Root Mean Squared Logarithmic Error):
-RMSLE <- function(Predicted, Reference) {
-    n <- length(Predicted)
-    sqrt(sum((log(Predicted + 1) - log(Reference + 1))^2)/n)
-}
-
-
+## Linear model with interaction. In-sample performance: R2 is 88%, and RMSLE is 0.76
+qrModel <- lm(Count ~ Season + Holiday + Workday + Weather + Temp + ATemp + Humidity + WindSpeed + Hour + Weekday + Tm1Count * Tm1Delay + Tm2Count * Tm2Delay + Tm3Count * Tm3Delay, data = training[complete.cases(training[, c("Tm1Count", "Tm1Delay", "Tm2Count", "Tm2Delay", "Tm3Count", "Tm3Delay")]), ], method = "qr")
+qrPred <- predict(qrModel, newdata = training[complete.cases(training[, c("Tm1Count", "Tm1Delay", "Tm2Count", "Tm2Delay", "Tm3Count", "Tm3Delay")]), ])
+qrPred <- ifelse(qrPred < 0, 0, round(qrPred))
+RMSLE(qrPred, training[complete.cases(training[, c("Tm1Count", "Tm1Delay", "Tm2Count", "Tm2Delay", "Tm3Count", "Tm3Delay")]), "Count"])
 
 
 
