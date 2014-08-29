@@ -92,14 +92,39 @@ for (i in 1:7) {
     }
 }
 training <- training2[order(training2$ID), ]
+training$Tm1Mix <- training$Tm1Count * training$Tm1Delay
+training$Tm2Mix <- training$Tm2Count * training$Tm2Delay
+training$Tm3Mix <- training$Tm3Count * training$Tm3Delay
 rm(training2, i, j)
 
-# Build models
-## Linear model with interaction. In-sample performance: R2 is 88%, and RMSLE is 0.76
-qrModel <- lm(Count ~ Season + Holiday + Workday + Weather + Temp + ATemp + Humidity + WindSpeed + Hour + Weekday + Tm1Count * Tm1Delay + Tm2Count * Tm2Delay + Tm3Count * Tm3Delay, data = training[complete.cases(training[, c("Tm1Count", "Tm1Delay", "Tm2Count", "Tm2Delay", "Tm3Count", "Tm3Delay")]), ], method = "qr")
-qrPred <- predict(qrModel, newdata = training[complete.cases(training[, c("Tm1Count", "Tm1Delay", "Tm2Count", "Tm2Delay", "Tm3Count", "Tm3Delay")]), ])
-qrPred <- ifelse(qrPred < 0, 0, round(qrPred))
-RMSLE(qrPred, training[complete.cases(training[, c("Tm1Count", "Tm1Delay", "Tm2Count", "Tm2Delay", "Tm3Count", "Tm3Delay")]), "Count"])
+# Build models with interactions and 3-period autocorrelation AR(3)
+Formula <- formula(Count ~ Season + Holiday + Workday + Weather + Temp + ATemp + Humidity + WindSpeed + Hour + Weekday + Tm1Count + Tm1Delay + Tm1Mix + Tm2Count + Tm2Delay + Tm2Mix + Tm3Count + Tm3Delay + Tm3Mix)
+trainingTm3 <- training[complete.cases(training[, c("Tm1Mix", "Tm2Mix", "Tm3Mix")]), ]
 
+## Linear gaussian model. In-sample performance: R2 is 88%, and RMSLE is 0.76
+qrModel <- train(Formula, data = trainingTm3, method = "lm")
+qrPred <- predict(qrModel, newdata = trainingTm3)
+qrPred <- ifelse(qrPred < 0, 0, round(qrPred))
+qrRMSLE <- RMSLE(qrPred, trainingTm3[, "Count"])
+
+## poisson model. It didn't work well, RMSLE is 3.15
+poisModel <- glm(Formula, data = trainingTm3, family = "poisson")
+poisPred <- predict(poisModel, newdata = trainingTm3)
+qrRMSLE <- RMSLE(round(poisPred), trainingTm3[, "Count"])
+
+## Lasso model. RMSLE is 0.68, better than gaussian model
+trainingTm3Lasso <- model.matrix(Formula, data = trainingTm3)[, -1]
+lassoModel <- glmnet(trainingTm3Lasso, trainingTm3[, "Count"])
+lassoPred <- predict(lassoModel, newx = trainingTm3Lasso)
+lassoPred <- ifelse(lassoPred < 0, 0, round(lassoPred))
+lassoRMSLE <- apply(lassoPred, 2, RMSLE, Reference = trainingTm3[, "Count"])
+min(lassoRMSLE)
+lassoModel$lambda[which.min(lassoRMSLE)]    # 44th lambda
+### CV Lasso
+lassoCVModel <- cv.glmnet(trainingTm3Lasso, trainingTm3[, "Count"], nfolds = 10)
+lassoCVPred <- predict(lassoCVModel, newx = trainingTm3Lasso)
+lassoCVPred <- as.vector(lassoCVPred)
+lassoCVPred <- ifelse(lassoCVPred < 0, 0, round(lassoCVPred))
+lassoCVRMSLE <- RMSLE(lassoCVPred, trainingTm3[, "Count"])
 
 
