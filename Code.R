@@ -47,16 +47,16 @@ RMSLE <- function(Predicted, Reference) {
 ## Plot Autocorrelation Function (ACF), and we could see:
 ## 1. There is autocorrelations for about 5 periods (will dig deeper).
 ## 2. There is alternative dependence with about 24 periods interval (presumably means 24 hours).
-plot(acf(training$count, lag.max = 100))
+plot(acf(training$Count, lag.max = 100))
 
 ## Plot ACF for each hour:
-## 1. Now we could see there is alternative dependence for about 7 periods (presumably means 7 days).
-plot(acf(training$count[training$Hour == 12], lag.max= 50))
+## 1. Now we could see there is alternative dependence for about 7 periods (presumably means 7 days in a week).
+plot(acf(training$Count[training$Hour == 12], lag.max= 50))
 
 ## Plot ACF for both hour and weekday, and here we check few different day and hour:
 ## 1. There is almost no alternative dependence
-plot(acf(training$count[training$Hour == 12 & training$Weekday == "Saturday"]))
-plot(acf(training$count[training$Hour == 16 & training$Weekday == "Tuesday"]))
+plot(acf(training$Count[training$Hour == 12 & training$Weekday == "Saturday"]))
+plot(acf(training$Count[training$Hour == 16 & training$Weekday == "Tuesday"]))
 
 
 ## Plot the cycle of 24 hours
@@ -73,6 +73,7 @@ ggplot(training[training$DateTime$year == 111 & training$DateTime$mon == 0 & tra
 ggplot(training[training$Hour == 8, ], aes(x = DateTime, y = Count)) + geom_line(aes(color = Weekday))
 ### Workday plot also shows this pattern.
 ggplot(training[training$Hour == 8, ], aes(x = DateTime, y = Count)) + geom_line(aes(color = Workday))
+
 
 # Preapring T-Series Data
 ## Add T-1, T-2, T-3 Count Data based on Weekday and Hour
@@ -97,15 +98,43 @@ training$Tm2Mix <- training$Tm2Count * training$Tm2Delay
 training$Tm3Mix <- training$Tm3Count * training$Tm3Delay
 rm(training2, i, j)
 
+
+# Data quality check
+## Holiday is a near zero variance, but the rest are not, so the quality is decent
+nearZeroVar(training[, c(4:13, 15:26)], saveMetrics = T)
+## Temp is highly correlated with ATemp, Registered is highly correlated with Count.
+round(cor(training[, c(8:11, 15:17)]), 2)
+findCorrelation(cor(training[, c(8:11, 15:17)]), cutoff = 0.75, verbose = T)
+## No linear combination is found
+findLinearCombos(training[, c(8:11, 18:26)][complete.cases(training[, c(24:26)]), ])
+
+
 # Build models with interactions and 3-period autocorrelation AR(3)
 Formula <- formula(Count ~ Season + Holiday + Workday + Weather + Temp + ATemp + Humidity + WindSpeed + Hour + Weekday + Tm1Count + Tm1Delay + Tm1Mix + Tm2Count + Tm2Delay + Tm2Mix + Tm3Count + Tm3Delay + Tm3Mix)
 trainingTm3 <- training[complete.cases(training[, c("Tm1Mix", "Tm2Mix", "Tm3Mix")]), ]
 
 ## Linear gaussian model. In-sample performance: R2 is 88%, and RMSLE is 0.76
-qrModel <- train(Formula, data = trainingTm3, method = "lm")
-qrPred <- predict(qrModel, newdata = trainingTm3)
-qrPred <- ifelse(qrPred < 0, 0, round(qrPred))
-qrRMSLE <- RMSLE(qrPred, trainingTm3[, "Count"])
+lmModel <- train(Formula, data = trainingTm3, method = "lm")
+lmPred <- predict(lmModel, newdata = trainingTm3)
+lmPred <- ifelse(lmPred < 0, 0, round(qrPred))
+(lmRMSLE <- RMSLE(lmPred, trainingTm3[, "Count"]))
+### From the residual plot we could see there is non-constant variance in the residual, so we need to do the transformation.
+ggplot(NULL, aes(x = lmPred, y = trainingTm3[, "Count"] - lmPred)) + geom_point()
+
+### With the log transformation of Count, Tm1Count, Tm2Count, Tm3Count, RMSLE is reduced to 0.38 from 0.76
+trainingTm3$Tm1CountLog <- log(trainingTm3$Tm1Count)
+trainingTm3$Tm2CountLog <- log(trainingTm3$Tm2Count)
+trainingTm3$Tm3CountLog <- log(trainingTm3$Tm3Count)
+trainingTm3$Tm1MixLog <- trainingTm3$Tm1CountLog * trainingTm3$Tm1Delay
+trainingTm3$Tm2MixLog <- trainingTm3$Tm2CountLog * trainingTm3$Tm2Delay
+trainingTm3$Tm3MixLog <- trainingTm3$Tm3CountLog * trainingTm3$Tm3Delay
+lm2Model <- train(log(Count) ~ Season + Holiday + Workday + Weather + Temp + ATemp + Humidity + WindSpeed + Hour + Weekday + Tm1CountLog + Tm1Delay + Tm1MixLog + Tm2CountLog + Tm2Delay + Tm2MixLog + Tm3CountLog + Tm3Delay + Tm3MixLog, data = trainingTm3, method = "lm")
+lm2Pred <- predict(lm2Model, newdata = trainingTm3)
+(lm2RMSLE <- RMSLE(round(exp(lm2Pred)), trainingTm3[, "Count"]))
+### Now the residuals have constant variance
+ggplot(NULL, aes(x = lm2Pred, y = log(trainingTm3$Count) - lm2Pred)) + geom_point()
+
+
 
 ## poisson model. It didn't work well, RMSLE is 3.15
 poisModel <- glm(Formula, data = trainingTm3, family = "poisson")
