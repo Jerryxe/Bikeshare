@@ -24,7 +24,7 @@ library(glmnet)
 source("Func.R")
 ## training set
 training <- read.csv("train.csv", header = T, stringsAsFactors = F)
-training$DateTime <- strptime(training$datetime, format = "%Y-%m-%d %H:%M:%S")
+training$DateTime <- strptime(training$datetime, format = "%Y-%m-%d %H", tz = "GMT")
 training$datetime <- NULL
 training <- training[order(training$DateTime), ]
 training$Hour <- factor(training$DateTime$hour)
